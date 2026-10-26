@@ -3,20 +3,35 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Libreria_Los_Muletas.Formularios;
 
 namespace Libreria_Los_Muletas
 {
-    internal static class Program
+    static class Program
     {
-        /// <summary>
-        /// Punto de entrada principal para la aplicación.
-        /// </summary>
         [STAThread]
         static void Main()
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new Form1());
+
+            try
+            {
+                Servicios.GestorBiblioteca.Instancia.CargarTodo();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error al cargar datos: " + ex.Message, "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            using (var login = new FrmLogin())
+            {
+                if (login.ShowDialog() != DialogResult.OK) return;
+            }
+
+            Application.Run(new FrmPrincipal());
         }
     }
 }
