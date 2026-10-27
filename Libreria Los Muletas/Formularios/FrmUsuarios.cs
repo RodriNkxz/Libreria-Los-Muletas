@@ -98,6 +98,15 @@ namespace Libreria_Los_Muletas.Formularios
                               u.FechaAlta.ToString("dd/MM/yyyy"),
                               u.PrestamosActivos,
                               u.EsMoroso ? "Sí" : "No");
+
+            // Sin resultados no queda ninguna fila seleccionada: se suelta el socio que
+            // estaba en edición para que Guardar/Eliminar no actúen sobre uno que ya no se ve.
+            if (grid.Rows.Count == 0)
+            {
+                _idEditando = null;
+                txtNombre.Text = ""; txtApellido.Text = ""; txtEmail.Text = "";
+                chkActivo.Checked = true;
+            }
         }
 
         private void BtnBuscar_Click(object sender, EventArgs e)

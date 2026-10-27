@@ -21,7 +21,7 @@ namespace Libreria_Los_Muletas.Formularios
 
             var lblTitulo = new Label
             {
-                Text = "Gestor de Biblioteca",
+                Text = "Gestor de Biblioteca Los Muletas",
                 Font = new Font("Segoe UI", 14, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
                 Location = new Point(20, 15),

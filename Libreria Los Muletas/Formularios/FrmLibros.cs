@@ -134,6 +134,15 @@ namespace Libreria_Los_Muletas.Formularios
                 grid.Rows.Add(l.Id, l.Titulo, l.Autor, l.Isbn,
                               l.AnioPublicacion, l.Genero,
                               l.EjemplaresDisponibles, l.EjemplaresTotales);
+
+            // Sin resultados no queda ninguna fila seleccionada: se suelta el libro que
+            // estaba en edición para que Guardar/Eliminar no actúen sobre uno que ya no se ve.
+            if (grid.Rows.Count == 0)
+            {
+                _idEditando = null;
+                txtTitulo.Text = ""; txtAutor.Text = ""; txtIsbn.Text = "";
+                txtAnio.Text = ""; txtGenero.Text = ""; txtEjemplares.Text = "1";
+            }
         }
 
         private void BtnBuscar_Click(object sender, EventArgs e)

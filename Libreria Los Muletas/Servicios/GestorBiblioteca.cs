@@ -83,16 +83,49 @@ namespace Libreria_Los_Muletas.Servicios
             var b = Bibliotecarios.FirstOrDefault(x =>
                 string.Equals(x.NombreUsuario, usuario, StringComparison.OrdinalIgnoreCase));
             if (b == null || !b.VerificarPassword(password)) return false;
+
+            // Si la contraseña estaba con el hash antiguo (SHA-256 sin sal), se migra al nuevo.
+            if (b.UsaHashAntiguo)
+            {
+                b.PasswordHash = Bibliotecario.Hashear(password);
+                GuardarTodo();
+            }
+
             SesionActual = b;
             return true;
+        }
+
+        /// <summary>Cambia la contraseña del bibliotecario con sesión iniciada.</summary>
+        public void CambiarPassword(string passwordActual, string passwordNueva)
+        {
+            if (SesionActual == null) throw new InvalidOperationException("No hay sesión iniciada.");
+            if (!SesionActual.VerificarPassword(passwordActual))
+                throw new InvalidOperationException("La contraseña actual no es correcta.");
+            if (string.IsNullOrEmpty(passwordNueva) || passwordNueva.Length < 6)
+                throw new InvalidOperationException("La contraseña nueva debe tener al menos 6 caracteres.");
+
+            SesionActual.PasswordHash = Bibliotecario.Hashear(passwordNueva);
+            GuardarTodo();
         }
 
         public void Logout() { SesionActual = null; }
 
         // ============ IDs AUTOINCREMENTALES ============
 
-        public int ProximoIdLibro() => Libros.Count == 0 ? 1 : Libros.Max(l => l.Id) + 1;
-        public int ProximoIdUsuario() => Usuarios.Count == 0 ? 1 : Usuarios.Max(u => u.Id) + 1;
+        private static int MaxId(IEnumerable<int> ids) { return ids.DefaultIfEmpty(0).Max(); }
+
+        // Se tienen en cuenta también los IDs que quedaron en préstamos/reservas históricos,
+        // para que un libro o socio nuevo no herede el historial de uno eliminado.
+        public int ProximoIdLibro() =>
+            Math.Max(MaxId(Libros.Select(l => l.Id)),
+            Math.Max(MaxId(Prestamos.Select(p => p.IdLibro)),
+                     MaxId(Reservas.Select(r => r.IdLibro)))) + 1;
+
+        public int ProximoIdUsuario() =>
+            Math.Max(MaxId(Usuarios.Select(u => u.Id)),
+            Math.Max(MaxId(Prestamos.Select(p => p.IdUsuario)),
+                     MaxId(Reservas.Select(r => r.IdUsuario)))) + 1;
+
         public int ProximoIdBibliotecario() => Bibliotecarios.Count == 0 ? 1 : Bibliotecarios.Max(b => b.Id) + 1;
         public int ProximoIdPrestamo() => Prestamos.Count == 0 ? 1 : Prestamos.Max(p => p.Id) + 1;
         public int ProximoIdReserva() => Reservas.Count == 0 ? 1 : Reservas.Max(r => r.Id) + 1;
@@ -102,6 +135,7 @@ namespace Libreria_Los_Muletas.Servicios
         public void AgregarLibro(Libro libro)
         {
             if (libro == null) throw new ArgumentNullException(nameof(libro));
+            ValidarAnio(libro);
             if (Libros.Any(l => string.Equals(l.Isbn, libro.Isbn, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("Ya existe un libro con ese ISBN.");
 
@@ -113,6 +147,7 @@ namespace Libreria_Los_Muletas.Servicios
         public void ActualizarLibro(Libro libro)
         {
             if (libro == null) throw new ArgumentNullException(nameof(libro));
+            ValidarAnio(libro);
             var existente = Libros.FirstOrDefault(l => l.Id == libro.Id);
             if (existente == null) throw new InvalidOperationException("El libro no existe.");
 
@@ -123,10 +158,14 @@ namespace Libreria_Los_Muletas.Servicios
             int prestados = Prestamos.Count(p =>
                 p.IdLibro == libro.Id && p.Estado == EstadoPrestamo.Activo);
 
-            if (libro.EjemplaresTotales < prestados)
+            // Los ejemplares retenidos para una reserva DISPONIBLE también cuentan como ocupados.
+            int retenidos = Reservas.Count(r =>
+                r.IdLibro == libro.Id && r.Estado == EstadoReserva.Disponible);
+
+            if (libro.EjemplaresTotales < prestados + retenidos)
                 throw new InvalidOperationException(string.Format(
-                    "No se pueden reducir los ejemplares a {0}; hay {1} en préstamo.",
-                    libro.EjemplaresTotales, prestados));
+                    "No se pueden reducir los ejemplares a {0}; hay {1} en préstamo y {2} reservados para retiro.",
+                    libro.EjemplaresTotales, prestados, retenidos));
 
             existente.Titulo = libro.Titulo;
             existente.Autor = libro.Autor;
@@ -156,11 +195,45 @@ namespace Libreria_Los_Muletas.Servicios
             GuardarTodo();
         }
 
+        private static void ValidarAnio(Libro libro)
+        {
+            if (libro.AnioPublicacion < 1 || libro.AnioPublicacion > DateTime.Today.Year)
+                throw new InvalidOperationException(
+                    "El año de publicación no es válido (debe estar entre 1 y " + DateTime.Today.Year + ").");
+        }
+
+        private static void ValidarEmail(string email)
+        {
+            if (string.IsNullOrWhiteSpace(email)) return;
+            string e = email.Trim();
+            try
+            {
+                var m = new System.Net.Mail.MailAddress(e);
+                if (m.Address != e) throw new FormatException();
+            }
+            catch (FormatException)
+            {
+                throw new InvalidOperationException("El email no es válido.");
+            }
+        }
+
+        private void ValidarEmailUnico(Usuario usuario)
+        {
+            if (string.IsNullOrWhiteSpace(usuario.Email)) return;
+            string e = usuario.Email.Trim();
+            if (Usuarios.Any(x => x.Id != usuario.Id &&
+                                  string.Equals((x.Email ?? "").Trim(), e, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Ya existe un socio con ese email.");
+        }
+
         // ============ USUARIOS: CRUD ============
 
         public void AgregarUsuario(Usuario usuario)
         {
             if (usuario == null) throw new ArgumentNullException(nameof(usuario));
+            ValidarEmail(usuario.Email);
+            ValidarEmailUnico(usuario);
+            if (usuario.Email != null) usuario.Email = usuario.Email.Trim();
             if (usuario.Id == 0) usuario.Id = ProximoIdUsuario();
             Usuarios.Add(usuario);
             GuardarTodo();
@@ -172,10 +245,26 @@ namespace Libreria_Los_Muletas.Servicios
             var existente = Usuarios.FirstOrDefault(u => u.Id == usuario.Id);
             if (existente == null) throw new InvalidOperationException("El usuario no existe.");
 
+            ValidarEmail(usuario.Email);
+            ValidarEmailUnico(usuario);
+
+            bool seDesactiva = existente.Activo && !usuario.Activo;
+
             existente.Nombre = usuario.Nombre;
             existente.Apellido = usuario.Apellido;
-            existente.Email = usuario.Email;
+            existente.Email = usuario.Email != null ? usuario.Email.Trim() : null;
             existente.Activo = usuario.Activo;
+
+            // Un socio inactivo no puede retirar libros: se liberan sus reservas
+            // para que no bloqueen la cola.
+            if (seDesactiva)
+            {
+                var reservas = Reservas.Where(r => r.IdUsuario == existente.Id &&
+                    (r.Estado == EstadoReserva.Pendiente || r.Estado == EstadoReserva.Disponible)).ToList();
+                foreach (var r in reservas)
+                    CancelarReservaYPromover(r);
+            }
+
             GuardarTodo();
         }
 
@@ -187,11 +276,11 @@ namespace Libreria_Los_Muletas.Servicios
             if (Prestamos.Any(p => p.IdUsuario == idUsuario && p.Estado == EstadoPrestamo.Activo))
                 throw new InvalidOperationException("No se puede eliminar un usuario con préstamos activos.");
 
-            foreach (var r in Reservas.Where(r => r.IdUsuario == idUsuario &&
-                (r.Estado == EstadoReserva.Pendiente || r.Estado == EstadoReserva.Disponible)))
-            {
-                r.Cancelar();
-            }
+            // ToList(): CancelarYPromover cambia estados de otras reservas mientras se recorre.
+            var reservasDelUsuario = Reservas.Where(r => r.IdUsuario == idUsuario &&
+                (r.Estado == EstadoReserva.Pendiente || r.Estado == EstadoReserva.Disponible)).ToList();
+            foreach (var r in reservasDelUsuario)
+                CancelarReservaYPromover(r);
 
             Usuarios.Remove(usuario);
             GuardarTodo();
@@ -288,6 +377,9 @@ namespace Libreria_Los_Muletas.Servicios
             if (libro == null) throw new ArgumentNullException(nameof(libro));
             if (dias <= 0) throw new ArgumentException("Los días deben ser mayores a cero.");
 
+            // Una reserva vencida no debe seguir bloqueando el libro hasta el próximo arranque.
+            ProcesarReservasExpiradas();
+
             var u = Usuarios.FirstOrDefault(x => x.Id == usuario.Id);
             if (u == null) throw new InvalidOperationException("El socio no existe.");
             if (!u.Activo) throw new InvalidOperationException("El socio está inactivo.");
@@ -308,42 +400,55 @@ namespace Libreria_Los_Muletas.Servicios
 
             if (reservaPropia != null)
             {
-                // Se completa la reserva y se crea el préstamo SIN tocar stock
-                // (el stock ya se incrementó al devolver el libro que la liberó)
+                // Se completa la reserva y se crea el préstamo.
+                // Al devolverse el libro que la liberó, el ejemplar volvió al stock
+                // (quedó "retenido" para este socio); ahora sale de nuevo del stock.
                 reservaPropia.Completar();
+                l.PrestarEjemplar();
                 var nuevo = new Prestamo(ProximoIdPrestamo(), l.Id, u.Id, DateTime.Today, dias);
                 Prestamos.Add(nuevo);
                 GuardarTodo();
                 return nuevo;
             }
 
-            // ¿El libro está reservado para OTRO socio?
-            bool reservadoParaOtro = Reservas.Any(r =>
-                r.IdLibro == l.Id && r.Estado == EstadoReserva.Disponible && r.IdUsuario != u.Id);
-            if (reservadoParaOtro)
-                throw new InvalidOperationException("El libro está reservado para otro socio.");
+            // El socio ya tiene una reserva en cola para este libro: no se duplica.
+            if (Reservas.Any(r => r.IdLibro == l.Id && r.IdUsuario == u.Id &&
+                                  r.Estado == EstadoReserva.Pendiente))
+                throw new InvalidOperationException(
+                    "El socio ya tiene una reserva pendiente para este libro.");
 
-            // ¿Hay reservas pendientes? Solo el primero de la cola puede llevarse el libro.
+            // El socio ya tiene este libro en su poder: no tiene sentido prestarlo ni reservarlo.
+            if (Prestamos.Any(p => p.IdLibro == l.Id && p.IdUsuario == u.Id &&
+                                   p.Estado == EstadoPrestamo.Activo))
+                throw new InvalidOperationException("El socio ya tiene prestado este libro.");
+
+            // Ejemplares "retenidos" para socios con reserva DISPONIBLE (siguen contando en el stock).
+            int retenidos = Reservas.Count(r =>
+                r.IdLibro == l.Id && r.Estado == EstadoReserva.Disponible);
+            int libres = l.EjemplaresDisponibles - retenidos;
             bool hayPendientes = Reservas.Any(r =>
                 r.IdLibro == l.Id && r.Estado == EstadoReserva.Pendiente);
-            if (hayPendientes)
-                throw new InvalidOperationException("Hay reservas pendientes para este libro. No se puede prestar a otro socio.");
 
-            // Sin stock → crear reserva y avisar
-            if (!l.HayDisponibilidad())
+            // Hay ejemplar libre y nadie esperando antes: préstamo directo.
+            if (libres > 0 && !hayPendientes)
             {
-                var reserva = new Reserva(ProximoIdReserva(), l.Id, u.Id);
-                Reservas.Add(reserva);
+                l.PrestarEjemplar();
+                var prestamo = new Prestamo(ProximoIdPrestamo(), l.Id, u.Id, DateTime.Today, dias);
+                Prestamos.Add(prestamo);
                 GuardarTodo();
-                throw new InvalidOperationException(
-                    "No hay ejemplares disponibles. Se generó una reserva para el socio.");
+                return prestamo;
             }
 
-            l.PrestarEjemplar();
-            var prestamo = new Prestamo(ProximoIdPrestamo(), l.Id, u.Id, DateTime.Today, dias);
-            Prestamos.Add(prestamo);
+            // Sin ejemplar libre (o hay cola): el socio entra al final de la cola FIFO.
+            var reserva = new Reserva(ProximoIdReserva(), l.Id, u.Id);
+            Reservas.Add(reserva);
             GuardarTodo();
-            return prestamo;
+
+            int posicion = Reservas.Count(r =>
+                r.IdLibro == l.Id && r.Estado == EstadoReserva.Pendiente);
+            throw new InvalidOperationException(string.Format(
+                "No hay ejemplares disponibles para este socio. Se generó una reserva (posición {0} en la cola).",
+                posicion));
         }
 
         // ============ DEVOLUCIÓN Y RENOVACIÓN ============
@@ -355,18 +460,18 @@ namespace Libreria_Los_Muletas.Servicios
             if (p.Estado == EstadoPrestamo.Devuelto)
                 throw new InvalidOperationException("El préstamo ya fue devuelto.");
 
+            var libro = Libros.FirstOrDefault(l => l.Id == p.IdLibro);
+
+            // Primero el stock y después el préstamo, para no dejar el préstamo
+            // marcado como devuelto si algo falla. El chequeo evita que datos
+            // viejos con el stock inflado impidan registrar la devolución.
+            if (libro != null && libro.EjemplaresDisponibles < libro.EjemplaresTotales)
+                libro.DevolverEjemplar();
+
             p.RegistrarDevolucion();
 
-            var libro = Libros.FirstOrDefault(l => l.Id == p.IdLibro);
-            if (libro != null) libro.DevolverEjemplar();
-
             // Promover la reserva pendiente más antigua a "Disponible" (24 h)
-            var primeraPendiente = Reservas
-                .Where(r => r.IdLibro == p.IdLibro && r.Estado == EstadoReserva.Pendiente)
-                .OrderBy(r => r.FechaReserva)
-                .FirstOrDefault();
-
-            if (primeraPendiente != null) primeraPendiente.MarcarDisponible();
+            PromoverSiguienteReserva(p.IdLibro);
 
             GuardarTodo();
         }
@@ -375,6 +480,11 @@ namespace Libreria_Los_Muletas.Servicios
         {
             var p = Prestamos.FirstOrDefault(x => x.Id == idPrestamo);
             if (p == null) throw new InvalidOperationException("El préstamo no existe.");
+
+            if (Reservas.Any(r => r.IdLibro == p.IdLibro && r.Estado == EstadoReserva.Pendiente))
+                throw new InvalidOperationException(
+                    "No se puede renovar: hay socios en cola de espera para este libro.");
+
             p.Renovar();
             GuardarTodo();
         }
@@ -383,8 +493,29 @@ namespace Libreria_Los_Muletas.Servicios
         {
             var r = Reservas.FirstOrDefault(x => x.Id == idReserva);
             if (r == null) throw new InvalidOperationException("La reserva no existe.");
-            r.Cancelar();
+            CancelarReservaYPromover(r);
             GuardarTodo();
+        }
+
+        /// <summary>
+        /// Cancela una reserva. Si estaba DISPONIBLE (tenía un ejemplar retenido),
+        /// el ejemplar queda libre y se ofrece al siguiente de la cola.
+        /// </summary>
+        private void CancelarReservaYPromover(Reserva r)
+        {
+            bool teniaEjemplarRetenido = r.Estado == EstadoReserva.Disponible;
+            r.Cancelar();
+            if (teniaEjemplarRetenido) PromoverSiguienteReserva(r.IdLibro);
+        }
+
+        /// <summary>Pasa a DISPONIBLE la reserva pendiente más antigua del libro (si hay).</summary>
+        private void PromoverSiguienteReserva(int idLibro)
+        {
+            var siguiente = Reservas
+                .Where(x => x.IdLibro == idLibro && x.Estado == EstadoReserva.Pendiente)
+                .OrderBy(x => x.FechaReserva)
+                .FirstOrDefault();
+            if (siguiente != null) siguiente.MarcarDisponible();
         }
 
         // ============ ESTADO / CONSULTAS ============
@@ -417,12 +548,7 @@ namespace Libreria_Los_Muletas.Servicios
 
             foreach (var r in expiradas)
             {
-                r.Cancelar();
-                var siguiente = Reservas
-                    .Where(x => x.IdLibro == r.IdLibro && x.Estado == EstadoReserva.Pendiente)
-                    .OrderBy(x => x.FechaReserva)
-                    .FirstOrDefault();
-                if (siguiente != null) siguiente.MarcarDisponible();
+                CancelarReservaYPromover(r);
             }
 
             if (expiradas.Count > 0) GuardarTodo();

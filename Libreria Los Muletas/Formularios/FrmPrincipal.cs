@@ -42,7 +42,7 @@ namespace Libreria_Los_Muletas.Formularios
 
             var lblBienvenida = new Label
             {
-                Text = "Bienvenido al Gestor de Biblioteca",
+                Text = "Bienvenido al Gestor de Biblioteca Los Muletas",
                 Font = new Font("Segoe UI", 18, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
                 Location = new Point(0, 60),

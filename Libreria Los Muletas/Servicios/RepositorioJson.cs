@@ -57,7 +57,14 @@ namespace Libreria_Los_Muletas.Servicios
             try
             {
                 string json = JsonConvert.SerializeObject(datos, Settings);
-                File.WriteAllText(ruta, json);
+
+                // Escritura segura: primero a un archivo temporal y luego se reemplaza el
+                // original, dejando una copia .bak. Así un corte a mitad de escritura
+                // no deja el JSON corrupto.
+                string tmp = ruta + ".tmp";
+                File.WriteAllText(tmp, json);
+                if (File.Exists(ruta)) File.Replace(tmp, ruta, ruta + ".bak");
+                else File.Move(tmp, ruta);
             }
             catch (Exception ex)
             {
